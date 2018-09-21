@@ -245,6 +245,23 @@ def item_similarity_iuf(_train):
     return item_sims
 
 
+def item_similarity_normal(_item_sims):
+    """
+    对物品相似度矩阵最大值归一化
+    :param _item_sims:
+    :return:
+    """
+    for item_i, related_items in _item_sims.items():
+        # i物品与其他物品的相似度
+        sims = [sim_ij for (_, sim_ij) in related_items.items()]
+        max_sim = max(sims)
+
+        for item_j, sim_ij in related_items.items():
+            _item_sims[item_i][item_j] /= max_sim
+
+    return _item_sims
+
+
 def item_similarity(train_data):
     """
     计算物品之间的相似度
