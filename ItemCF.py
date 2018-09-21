@@ -16,11 +16,6 @@ import multiprocessing
 
 
 def item_similarity_multi_process_func1(_co_items, _num_items):
-    """
-    :param _co_items: dict 2d 共现矩阵 表示每两个物品被共有的统计矩阵
-    :param _num_items: dict 每个物品被多少用户拥有
-    :return:
-    """
     for user, items in train.items():
         for item_i in items:
             if item_i not in _num_items:
@@ -39,13 +34,6 @@ def item_similarity_multi_process_func1(_co_items, _num_items):
 
 
 def item_similarity_multi_process_func2(_item_sims, _co_items, _num_items, _items):
-    """
-    :param _item_sims: dict 2d 物品相似度矩阵
-    :param _co_items: dict 2d 共现矩阵 表示每两个物品被共有的统计矩阵
-    :param _num_items: dict 每个物品被多少用户拥有
-    :param _items: list 物品集合
-    :return:
-    """
     for item_i in _items:
         related_items = _co_items.get(item_i)
         # i物品与其他物品
@@ -62,7 +50,7 @@ def item_similarity_multi_process(_train):
     :param _train: dict{list} 训练集
     :return:
     """
-    cpus = multiprocessing.cpu_count()
+    cpu_nums = multiprocessing.cpu_count()
     # 统计矩阵 co_items:表示两个物品被多少用户共同交互过 num_items表示每个用品被多少用户交互过
     manager = multiprocessing.Manager()
     item_sims = manager.dict()
@@ -87,20 +75,28 @@ def item_similarity_multi_process(_train):
         if item not in W:
             item_sims[item] = manager.dict()
 
-    # 使用进程池
-    pool = multiprocessing.Pool(processes=cpus)
-    num_step = cpus * 10
-    for ii in range(num_step):
-        step = int(item_counts / num_step) + 1
-        start_idx = step * ii
-        end_idx = step * (ii + 1)
+    # 使用多进程
+    process_list = []
+    for i in range(cpu_nums):
+        # 每个子进程处理一部分数据
+        step = int(item_counts / cpu_nums) + 1
+        start_idx = step * i
+        end_idx = step * (i + 1)
         if end_idx >= item_counts:
             end_idx = item_counts
-        pool.apply(item_similarity_multi_process_func2,
-                   args=(item_sims, co_items, num_items, all_items[start_idx:end_idx]))
-    pool.close()
-    pool.join()
-    return W
+        sub_items = all_items[start_idx:end_idx]
+
+        process = multiprocessing.Process(target=item_similarity_multi_process_func2,
+                                          args=(item_sims, co_items, num_items, sub_items))
+        process_list.append(process)
+        process.start()
+
+    # 等待子进程结束
+    for process in process_list:
+        process.join()
+    # 所有进程均执行完毕
+
+    return item_sims
 
 
 def item_similarity_multi_thread(_train):
@@ -259,14 +255,84 @@ def item_similarity(train_data):
     """
     start = time.time()
 
-    item_sims = item_similarity_multi_thread(train_data)
+    # item_sims = item_similarity_multi_thread(train_data)
     # item_sims = item_similarity_multi_process(train_data)
     # item_sims = item_similarity_single_thread(train_data)
-    # item_sims = item_similarity_iuf(train_data)
+    item_sims = item_similarity_iuf(train_data)
     # 归一化
     item_similarity_normal(item_sims)
     print("item similarity done, cost " + str(time.time() - start) + " s")
     return item_sims
+
+
+def recommend_multi_process_func1(_users, _train, _item_sims, _nearest_k, _top_n, _result_mq):
+    _recommend_lists = dict()
+    for user in _users:
+        # 该用户交互过的物品
+        interacted_items = _train.get(user)
+        rank = dict()
+        for item_i, rating in interacted_items.items():
+            # 根据相似度矩阵, 找到距离物品i最近的K个物品
+            nearest_items = sorted(_item_sims[item_i].items(), key=operator.itemgetter(1), reverse=True)[0:_nearest_k]
+            for item_j, wj in nearest_items:
+                if item_j in interacted_items:
+                    continue  # 该物品已经被用户交互过
+                if item_j not in rank:
+                    rank[item_j] = 0
+                rank[item_j] += rating * wj
+
+        # 选择Top N 作为该用户的推荐
+        top_n_items = sorted(rank.items(), key=operator.itemgetter(1), reverse=True)[0:_top_n]
+        # 转成list
+        _recommend_lists[user] = [item for (item, _) in top_n_items]
+    _result_mq.put(_recommend_lists)
+
+
+def recommend_multi_process(_train, _item_sims, _nearest_k, _top_n):
+    """
+    多进程推荐
+    :param _train: dict{list} 训练集
+    :param _item_sims: dict 2d 物品相似度矩阵
+    :param _nearest_k: int 使用最近的k个物品计算评分
+    :param _top_n: int 返回评分最高的n个物品
+    :return recommend_lists: dict{list} 每个用户的top n推荐列表
+    """
+
+    recommend_lists = dict()
+
+    cpu_nums = multiprocessing.cpu_count()
+    users = [user for user in _train]  # 所有用户集合
+    user_counts = len(users)
+
+    result_mq_list = []
+    process_list = []
+    for i in range(cpu_nums):
+        # 每个子进程处理一部分数据
+        step = int(user_counts / cpu_nums) + 1
+        start_idx = step * i
+        end_idx = step * (i + 1)
+        if end_idx >= user_counts:
+            end_idx = user_counts
+        sub_users = users[start_idx:end_idx]
+
+        # 进程通信 Queue
+        result_mq = multiprocessing.Queue()
+        process = multiprocessing.Process(target=recommend_multi_process_func1,
+                                          args=(sub_users, _train, _item_sims, _nearest_k, _top_n, result_mq))
+        process_list.append(process)
+        process.start()
+        result_mq_list.append(result_mq)
+
+    # 等待子进程结束
+    for process in process_list:
+        process.join()
+    # 所有进程均执行完毕
+
+    # 获取数据
+    for queue in result_mq_list:
+        recommend_lists.update(queue.get())
+
+    return recommend_lists
 
 
 def recommend_multi_thread(_train, _item_sims, _nearest_k, _top_n):
@@ -293,7 +359,7 @@ def recommend_multi_thread(_train, _item_sims, _nearest_k, _top_n):
         def run(self):
             rank = dict()
             # 该用户交互过的物品
-            for item_i in self.__interact_items:
+            for item_i, rating in self.__interact_items.items():
                 # 根据相似度矩阵, 找到距离物品i最近的K个物品
                 nearest_items = sorted(self.__item_sims[item_i].items(), key=operator.itemgetter(1), reverse=True)[
                                 0:self.__nearest_k]
@@ -302,7 +368,7 @@ def recommend_multi_thread(_train, _item_sims, _nearest_k, _top_n):
                         continue  # 该物品已经被用户交互过
                     if item_j not in rank:
                         rank[item_j] = 0
-                        rank[item_j] += 1 * wj  # ri=1 是用户对物品i的评分 rating
+                        rank[item_j] += rating * wj
 
             # 根据预测评分 排序选择Top N 作为该用户的推荐
             top_n_rank = sorted(rank.items(), key=operator.itemgetter(1), reverse=True)[0:self.__top_n]
@@ -334,7 +400,7 @@ def recommend_single_thread(_train, _item_sims, _nearest_k, _top_n):
     for user, interacted_items in _train.items():
         rank = dict()
         # 该用户交互过的物品
-        for item_i in interacted_items:
+        for item_i, rating in interacted_items.items():
             # 根据相似度矩阵, 找到距离物品i最近的K个物品
             nearest_items = sorted(_item_sims[item_i].items(), key=operator.itemgetter(1), reverse=True)[0:_nearest_k]
             for item_j, wj in nearest_items:
@@ -342,7 +408,7 @@ def recommend_single_thread(_train, _item_sims, _nearest_k, _top_n):
                     continue  # 该物品已经被用户交互过
                 if item_j not in rank:
                     rank[item_j] = 0
-                rank[item_j] += 1 * wj  # ri=1 是用户对物品i的评分 rating
+                rank[item_j] += rating * wj  # rating是用户对物品i的评分
 
         # 选择Top N 作为该用户的推荐
         top_n_items = sorted(rank.items(), key=operator.itemgetter(1), reverse=True)[0:_top_n]
@@ -362,7 +428,8 @@ def recommend(train_data, item_sims, nearest_k=5, top_n=10):
     """
     start = time.time()
     # recommend_list = recommend_multi_thread(train_data, item_sims, nearest_k, top_n)
-    recommend_list = recommend_single_thread(train_data, item_sims, nearest_k, top_n)
+    recommend_list = recommend_multi_process(train_data, item_sims, nearest_k, top_n)
+    # recommend_list = recommend_single_thread(train_data, item_sims, nearest_k, top_n)
     print("recommend done, cost " + str(time.time() - start) + " s")
     return recommend_list
 
@@ -519,6 +586,11 @@ def load_data(file):
             line = f.readline()
     print("load data done, cost " + str((time.time() - start) * 1000) + " ms")
     return all_data
+    return_data = dict()
+    for key in all_data.keys():
+        if key <= 10000:
+            return_data[key] = all_data.get(key)
+    return return_data
 
 
 def save_result(_cost_time, _nearest_k, _top_n, _p, _r, _c, _po):
@@ -551,12 +623,7 @@ if __name__ == '__main__':
 
     W = item_similarity(train)
 
-    print("cost time " + str((time.time() - start_time) * 1000) + " ms")
-    exit(0)
-
-    nearest_K = 10
-    top_N = 10
-    recommends = recommend(train, W, nearest_K, top_N)
+    recommends = recommend(train, W, nearest_k=10, top_n=10)
 
     p = precision(train, test, recommends)
 
