@@ -142,6 +142,8 @@ def item_similarity_multi_thread(_train):
 
     for u, items in _train.items():
         for item_i in items:
+            if item_i not in co_items:
+                co_items[item_i] = dict()
             if item_i not in num_items:
                 num_items[item_i] = 0
             num_items[item_i] += 1
@@ -149,8 +151,6 @@ def item_similarity_multi_thread(_train):
             for item_j in items:
                 if item_i == item_j:
                     continue
-                if item_i not in co_items:
-                    co_items[item_i] = dict()
                 if item_j not in co_items[item_i]:
                     co_items[item_i][item_j] = 0
                 co_items[item_i][item_j] += 1
@@ -171,7 +171,7 @@ def item_similarity_single_thread(_train):
     :param _train:
     :return:
     """
-    # 构架统计矩阵 C:表示两个物品被多少用户共同交互过 N表示每个用品被多少用户交互过
+    # 统计矩阵 C:表示两个物品被多少用户共同交互过 N表示每个用品被多少用户交互过
     item_sims = dict()
     co_items = dict()
     num_items = dict()
@@ -204,6 +204,47 @@ def item_similarity_single_thread(_train):
     return item_sims
 
 
+def item_similarity_iuf(_train):
+    """
+    Item-IUF 相似度计算的改进
+    Inverse User Frequency 用户活跃度对数的倒数的参数
+    活跃用户对物品相似度的贡献应当小于不活跃用户
+    :param _train:
+    :return:
+    """
+    # 统计矩阵 C:表示两个物品被多少用户共同交互过 N表示每个用品被多少用户交互过
+    item_sims = dict()
+    co_items = dict()
+    num_items = dict()
+
+    for user, items in train.items():
+        for item_i in items:
+            if item_i not in co_items:
+                co_items[item_i] = dict()
+            if item_i not in num_items:
+                num_items[item_i] = 0
+            num_items[item_i] += 1
+
+            for item_j in items:
+                if item_i == item_j:
+                    continue
+                if item_j not in co_items[item_i]:
+                    co_items[item_i][item_j] = 0
+                co_items[item_i][item_j] += 1 / math.log(1 + len(items) * 1.0)
+
+    # 计算物品之间的相似度
+    for item_i, related_items in co_items.items():
+        # i物品与其他物品
+        for item_j, cij in related_items.items():
+            # j物品 cij表示i j被多少用户共有
+            if item_i not in item_sims:
+                item_sims[item_i] = dict()
+            if item_j not in item_sims[item_i]:
+                item_sims[item_i][item_j] = 0
+            item_sims[item_i][item_j] = cij / math.sqrt(num_items[item_i] * num_items[item_j])
+    return item_sims
+
+
 def item_similarity(train_data):
     """
     计算物品之间的相似度
@@ -214,7 +255,8 @@ def item_similarity(train_data):
 
     # W1 = item_similarity_multi_thread(train_data)
     # W2 = item_similarity_multi_process(train_data)
-    item_sims = item_similarity_single_thread(train_data)
+    # item_sims = item_similarity_single_thread(train_data)
+    item_sims = item_similarity_iuf(train_data)
     print("item similarity done, cost " + str(time.time() - start) + " s")
     return item_sims
 
@@ -414,7 +456,7 @@ def popularity(train_data, recommend_list):
 
 def split_data(all_data, m, k, seed):
     """
-    切分数据集
+    切分数据集 留一法
     :param all_data:
     :param m:
     :param k:
@@ -442,8 +484,12 @@ def split_data(all_data, m, k, seed):
     return train_data, test_data
 
 
-# 加载数据
 def load_data(file):
+    """
+    加载数据
+    :param file:
+    :return:
+    """
     start = time.time()
     all_data = dict()
     with open(file, 'r') as f:
@@ -457,7 +503,7 @@ def load_data(file):
             all_data[user].append(item)
             line = f.readline()
     print("load data done, cost " + str(time.time() - start) + " s")
-
+    return all_data
     return_data = dict()
     for key in all_data.keys():
         if key <= 1000:
@@ -465,15 +511,38 @@ def load_data(file):
     return return_data
 
 
+def save_result(_cost_time, _nearest_k, _top_n, _p, _r, _c, _po):
+    """
+    保存结果到文件中
+    :param _cost_time:
+    :param _nearest_k:
+    :param _top_n:
+    :param _p:
+    :param _r:
+    :param _c:
+    :param _po:
+    :return:
+    """
+    with open('result.txt', 'a') as f:
+        f.write(str(_nearest_k) + ", " + str(_top_n) + ", " + str(_p) + ", " + str(_r) \
+                + ", " + str(_c) + ", " + str(_po) + "\n")
+
+
+def plot_result():
+    pass
+
+
 if __name__ == '__main__':
     start_time = time.time()
     data = load_data("./data/ratings.dat")
 
-    train, test = split_data(data, 10, 2, time.time())
+    train, test = split_data(data, 8, 1, time.time())
 
     W = item_similarity(train)
 
-    recommends = recommend(train, W)
+    nearest_k = 10
+    top_n = 10
+    recommends = recommend(train, W, nearest_k, top_n)
 
     p = precision(train, test, recommends)
 
@@ -485,5 +554,28 @@ if __name__ == '__main__':
 
     print(p, r, c, po)
 
-    print("cost time " + str(time.time() - start_time) + " s")
-    pass
+    cost_time = time.time() - start_time
+
+    print("cost time " + str(cost_time) + " s")
+
+    exit(0)
+
+    for i in range(5, 100, 5):
+        nearest_k = i
+        top_n = 10
+        recommends = recommend(train, W, nearest_k, top_n)
+
+        p = precision(train, test, recommends)
+
+        r = recall(train, test, recommends)
+
+        c = coverage(train, recommends)
+
+        po = popularity(train, recommends)
+
+        print(p, r, c, po)
+        cost_time = time.time() - start_time
+
+        save_result(cost_time, nearest_k, top_n, p, r, c, po)
+
+        print("cost time " + str(cost_time) + " s")
