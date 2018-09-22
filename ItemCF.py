@@ -8,6 +8,7 @@ import random
 import operator
 import threading
 import multiprocessing
+from collections import Counter
 
 """
 基于物品的协同过滤算法
@@ -15,67 +16,126 @@ import multiprocessing
 """
 
 
-def item_similarity_multi_process_func1(_co_items, _num_items):
-    for user, items in train.items():
+def item_similarity_multi_process_func1(_train, _sub_users, _result_mq, _iuf=False):
+    """
+    统计共现矩阵以及每个物品被多少用户交互过
+    :param _train:
+    :param _sub_users:
+    :param _result_mq:
+    :param _iuf:
+    :return:
+    """
+    num_items = dict()
+    co_items = dict()
+    for user in _sub_users:
+        items = _train.get(user)  # 该用户交互过的物品
+        if _iuf:
+            iuf_value = 1 / math.log(1 + len(items) * 1.0)  # IUF 该用户对物品相似度的贡献
+        else:
+            iuf_value = 1
         for item_i in items:
-            if item_i not in _num_items:
-                _num_items[item_i] = 0
-            _num_items[item_i] += 1
+            if item_i not in co_items:
+                co_items[item_i] = dict()
+            if item_i not in num_items:
+                num_items[item_i] = 0
+            num_items[item_i] += 1
+
             for item_j in items:
                 if item_i == item_j:
                     continue
-                if item_j not in _co_items[item_i]:
-                    item_i_dict = _co_items[item_i]
-                    item_i_dict[item_j] = 0
-                    _co_items[item_i] = item_i_dict
-                item_i_dict = _co_items[item_i]
-                item_i_dict[item_j] += 1
-                _co_items[item_i] = item_i_dict
+                if item_j not in co_items[item_i]:
+                    co_items[item_i][item_j] = 0
+                co_items[item_i][item_j] += iuf_value
+    _result_mq.put((num_items, co_items))
 
 
-def item_similarity_multi_process_func2(_item_sims, _co_items, _num_items, _items):
-    for item_i in _items:
-        related_items = _co_items.get(item_i)
+def item_similarity_multi_process_func2(_co_items, _num_items, _sub_items, _result_mq):
+    """
+    计算相似度
+    :param _sub_items:
+    :param _co_items:
+    :param _num_items:
+    :param _result_mq:
+    :return:
+    """
+    _item_sims = dict()
+    for item_i in _sub_items:
+        related_items = _co_items.get(item_i)  # 与该物品共同被其他用户交互的所有物品
+        if item_i not in _item_sims:
+            _item_sims[item_i] = dict()
         # i物品与其他物品
         for item_j, cij in related_items.items():
             # j物品 cij表示物品i和物品j被多少用户共有
-            item_i_dict = W[item_i]
-            item_i_dict[item_j] = cij / math.sqrt(_num_items[item_i] * _num_items[item_j])
-            _item_sims[item_i] = item_i_dict
+            _item_sims[item_i][item_j] = cij / math.sqrt(_num_items[item_i] * _num_items[item_j])
+    _result_mq.put(_item_sims)
 
 
-def item_similarity_multi_process(_train):
+def item_similarity_multi_process(_train, iuf=False):
     """
     多进程计算物品之间的相似度
     :param _train: dict{list} 训练集
+    :param iuf: bool 是否考虑用户活跃度
     :return:
     """
+
+    item_sims = dict()  # 物品相似度矩阵
+    co_items = dict()  # 表示两个物品被多少用户共同交互过
+    num_items = dict()  # 表示每个用品被多少用户交互过
+
     cpu_nums = multiprocessing.cpu_count()
-    # 统计矩阵 co_items:表示两个物品被多少用户共同交互过 num_items表示每个用品被多少用户交互过
-    manager = multiprocessing.Manager()
-    item_sims = manager.dict()
-    co_items = manager.dict()
-    num_items = manager.dict()
 
-    # 初始化二维dict 必须在该进程中初始化
-    for user, items in _train.items():
-        for item in items:
-            if item not in co_items:
-                co_items[item] = manager.dict()
-    # 多进程
-    p1 = multiprocessing.Process(target=item_similarity_multi_process_func1, args=(co_items, num_items))
-    p1.start()
-    p1.join()
+    # 统计矩阵 ---------
+    users = [user for user in _train]  # 所有用户集合
+    user_counts = len(users)
 
-    # 计算物品之间的相似度
-    all_items = list(co_items.keys())
+    result_mq_list = []
+    process_list = []
+    for i in range(cpu_nums):
+        # 每个子进程处理一部分数据
+        step = int(user_counts / cpu_nums) + 1
+        start_idx = step * i
+        end_idx = step * (i + 1)
+        if end_idx >= user_counts:
+            end_idx = user_counts
+        sub_users = users[start_idx:end_idx]
+
+        # 进程通信 Queue
+        result_mq = multiprocessing.Queue()
+        process = multiprocessing.Process(target=item_similarity_multi_process_func1,
+                                          args=(_train, sub_users, result_mq, iuf))
+        process.start()
+        process_list.append(process)
+        result_mq_list.append(result_mq)
+
+    # 等待子进程结束
+
+    # 所有进程均执行完毕
+
+    # 所有进程均执行完毕
+
+    # 获取数据
+    for queue in result_mq_list:
+        (sub_num_items, sub_co_items) = queue.get()
+        # 合并dict 相同key的value叠加
+        num_items = dict(Counter(num_items) + Counter(sub_num_items))
+
+        # 合并dict 2d 相同key的value叠加
+        if co_items is None:
+            co_items = sub_co_items
+        else:
+            for item_i, sub_related_items in sub_co_items.items():
+                if item_i in item_sims:
+                    # 已经存在该物品为中心的共现dict 合并
+                    co_items[item_i] = dict(Counter(co_items[item_i]) + Counter(sub_related_items))
+                else:
+                    # 尚不存在该物品 赋值
+                    co_items[item_i] = sub_related_items
+
+    # 计算物品之间的相似度 ------
+    all_items = [item for item in co_items]  # 所有物品集合
     item_counts = len(all_items)  # 物品总数
-    # 初始化二维dict
-    for item in all_items:
-        if item not in W:
-            item_sims[item] = manager.dict()
 
-    # 使用多进程
+    result_mq_list = []
     process_list = []
     for i in range(cpu_nums):
         # 每个子进程处理一部分数据
@@ -86,23 +146,34 @@ def item_similarity_multi_process(_train):
             end_idx = item_counts
         sub_items = all_items[start_idx:end_idx]
 
+        # 进程通信 Queue
+        result_mq = multiprocessing.Queue()
         process = multiprocessing.Process(target=item_similarity_multi_process_func2,
-                                          args=(item_sims, co_items, num_items, sub_items))
-        process_list.append(process)
+                                          args=(co_items, num_items, sub_items, result_mq))
         process.start()
+        process_list.append(process)
+        result_mq_list.append(result_mq)
 
     # 等待子进程结束
-    for process in process_list:
-        process.join()
+
     # 所有进程均执行完毕
+    # 获取数据
+    for queue in result_mq_list:
+        sub_item_sims = queue.get()  # dict 2d
+        # 合并dict  2d
+        if item_sims is None:
+            item_sims = sub_item_sims
+        else:
+            item_sims.update(sub_item_sims)
 
     return item_sims
 
 
-def item_similarity_multi_thread(_train):
+def item_similarity_multi_thread(_train, iuf=False):
     """
     多线程计算物品之间的相似度
     :param _train: dict{list} 训练集
+    :param iuf: bool 是否考虑用户活跃度
     :return:
     """
 
@@ -130,6 +201,10 @@ def item_similarity_multi_thread(_train):
     num_items = dict()
 
     for u, items in _train.items():
+        if iuf:
+            iuf_value = 1 / math.log(1 + len(items) * 1.0)  # IUF 该用户对物品相似度的贡献
+        else:
+            iuf_value = 1
         for item_i in items:
             if item_i not in co_items:
                 co_items[item_i] = dict()
@@ -142,7 +217,7 @@ def item_similarity_multi_thread(_train):
                     continue
                 if item_j not in co_items[item_i]:
                     co_items[item_i][item_j] = 0
-                co_items[item_i][item_j] += 1
+                co_items[item_i][item_j] += iuf_value
 
     items = list(co_items.keys())
     for ii in range(len(items)):
@@ -154,49 +229,11 @@ def item_similarity_multi_thread(_train):
     return item_sims
 
 
-def item_similarity_single_thread(_train):
+def item_similarity_single_thread(_train, iuf=False):
     """
     单进程 单线程常规计算相似度
     :param _train:
-    :return:
-    """
-    # 统计矩阵 C:表示两个物品被多少用户共同交互过 N表示每个用品被多少用户交互过
-    item_sims = dict()
-    co_items = dict()
-    num_items = dict()
-
-    for user, items in train.items():
-        for item_i in items:
-            if item_i not in co_items:
-                co_items[item_i] = dict()
-            if item_i not in num_items:
-                num_items[item_i] = 0
-            num_items[item_i] += 1
-
-            for item_j in items:
-                if item_i == item_j:
-                    continue
-                if item_j not in co_items[item_i]:
-                    co_items[item_i][item_j] = 0
-                co_items[item_i][item_j] += 1
-
-    # 计算物品之间的相似度
-    for item_i, related_items in co_items.items():
-        if item_i not in item_sims:
-            item_sims[item_i] = dict()
-        # i物品与其他物品
-        for item_j, cij in related_items.items():
-            # j物品 cij表示i j被多少用户共有
-            item_sims[item_i][item_j] = cij / math.sqrt(num_items[item_i] * num_items[item_j])
-    return item_sims
-
-
-def item_similarity_iuf(_train):
-    """
-    Item-IUF 相似度计算的改进
-    Inverse User Frequency 用户活跃度对数的倒数的参数
-    活跃用户对物品相似度的贡献应当小于不活跃用户
-    :param _train: dict 2d
+    :param iuf: bool 是否考虑用户活跃度
     :return:
     """
     # 统计矩阵 C:表示两个物品被多少用户共同交互过 N表示每个用品被多少用户交互过
@@ -205,8 +242,10 @@ def item_similarity_iuf(_train):
     num_items = dict()
 
     for user, items in _train.items():
-        iuf_value = 1 / math.log(1 + len(items) * 1.0)  # IUF 该用户对物品相似度的贡献
-        # 该用户交互过的所有物品
+        if iuf:
+            iuf_value = 1 / math.log(1 + len(items) * 1.0)  # IUF 该用户对物品相似度的贡献
+        else:
+            iuf_value = 1
         for item_i in items:
             if item_i not in co_items:
                 co_items[item_i] = dict()
@@ -229,6 +268,20 @@ def item_similarity_iuf(_train):
         for item_j, cij in related_items.items():
             # j物品 cij表示i j被多少用户共有
             item_sims[item_i][item_j] = cij / math.sqrt(num_items[item_i] * num_items[item_j])
+    return item_sims
+
+
+def item_similarity_iuf(_train):
+    """
+    Item-IUF 相似度计算的改进
+    Inverse User Frequency 用户活跃度对数的倒数的参数
+    活跃用户对物品相似度的贡献应当小于不活跃用户
+    :param _train: dict 2d
+    :return:
+    """
+    # item_sims = item_similarity_multi_thread(_train, True)
+    item_sims = item_similarity_multi_process(_train, True)
+    # item_sims = item_similarity_single_thread(_train, True)
     return item_sims
 
 
@@ -319,8 +372,9 @@ def recommend_multi_process(_train, _item_sims, _nearest_k, _top_n):
         result_mq = multiprocessing.Queue()
         process = multiprocessing.Process(target=recommend_multi_process_func1,
                                           args=(sub_users, _train, _item_sims, _nearest_k, _top_n, result_mq))
-        process_list.append(process)
+
         process.start()
+        process_list.append(process)
         result_mq_list.append(result_mq)
 
     # 等待子进程结束
@@ -620,6 +674,8 @@ if __name__ == '__main__':
     data = load_data("./data/ratings.dat")
 
     train, test = split_data(data, 8, 1)
+
+    data.clear()
 
     W = item_similarity(train)
 
