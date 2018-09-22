@@ -4,11 +4,12 @@
 
 import math
 import time
-import random
 import operator
 import threading
 import multiprocessing
 from collections import Counter
+
+import utils
 
 """
 基于物品的协同过滤算法
@@ -300,6 +301,27 @@ def item_similarity_normal(_item_sims):
             _item_sims[item_i][item_j] /= max_sim
 
 
+def compare_item_similarity(_item_sims_1, _item_sims_2):
+    """
+    比较两种不同方式的得到的相似度矩阵是否存在差异
+    :param _item_sims_1:
+    :param _item_sims_2:
+    :return:
+    """
+    # key的差异
+    diff = set(_item_sims_1.keys()) - set(_item_sims_2.keys())
+    print(diff)
+    # value的差异
+    for key in _item_sims_1.keys():
+        val1 = _item_sims_1.get(key)
+        val2 = _item_sims_2.get(key)
+        for key_2 in val1.keys():
+            vall1 = val1.get(key_2)
+            vall2 = val2.get(key_2)
+            if vall1 != vall2:
+                print(key, key_2, vall1, vall2, "diff value")
+
+
 def item_similarity(train_data):
     """
     计算物品之间的相似度
@@ -307,11 +329,12 @@ def item_similarity(train_data):
     :return:
     """
     start = time.time()
-
+    # 多进程 多线程 单线程 iuf
     # item_sims = item_similarity_multi_thread(train_data)
     # item_sims = item_similarity_multi_process(train_data)
-    # item_sims = item_similarity_single_thread(train_data)
-    item_sims = item_similarity_iuf(train_data)
+    item_sims = item_similarity_single_thread(train_data)
+    # item_sims = item_similarity_iuf(train_data)
+
     # 归一化
     item_similarity_normal(item_sims)
     print("item similarity done, cost " + str(time.time() - start) + " s")
@@ -488,206 +511,22 @@ def recommend(train_data, item_sims, nearest_k=5, top_n=10):
     return recommend_list
 
 
-def precision(train_data, test_data, recommend_list):
-    """
-    计算precision准确度
-    :param train_data: dict{list} 训练集
-    :param test_data: dict{list} 测试集
-    :param recommend_list: dict{list} 每个用户的top n推荐列表
-    :return:
-    """
-    start = time.time()
-    hit_num = 0
-    all_num = 0
-
-    for user in train_data.keys():
-        tu = test_data[user]  # 测试集中该用户交互的物品
-        rank = recommend_list.get(user)  # 给该用户推荐的物品
-        for item in rank:
-            if item in tu:
-                hit_num += 1
-        all_num += len(rank)
-    print("calculate precision done, cost " + str(time.time() - start) + " s")
-    return hit_num / (all_num * 1.0)
-
-
-def recall(train_data, test_data, recommend_list):
-    """
-    计算recall召回率
-    :param train_data:
-    :param test_data:
-    :param recommend_list:
-    :return:
-    """
-    start = time.time()
-    hit_num = 0
-    all_num = 0
-    for user in train_data.keys():
-        tu = test_data[user]
-        rank = recommend_list.get(user)  # 给该用户推荐的物品
-        for item in rank:
-            if item in tu:
-                hit_num += 1
-        all_num += len(tu)
-    print("calculate recall done, cost " + str(time.time() - start) + " s")
-    return hit_num / (all_num * 1.0)
-
-
-def coverage(train_data, recommend_list):
-    """
-    计算coverage覆盖率
-    :param train_data:
-    :param recommend_list:
-    :return:
-    """
-    start = time.time()
-    # 推荐的所有物品集合
-    recommend_items = set()
-    all_items = set()
-    for user, items in train_data.items():
-        for item in items:
-            all_items.add(item)
-        rank = recommend_list.get(user)  # 给该用户推荐的物品
-        for item in rank:
-            recommend_items.add(item)
-    print("calculate coverage done, cost " + str(time.time() - start) + " s")
-    return len(recommend_items) / (len(all_items) * 1.0)
-
-
-def popularity(train_data, recommend_list):
-    """
-    计算popularity流行度
-    :param train_data:
-    :param recommend_list:
-    :return:
-    """
-    start = time.time()
-    item_popularity = dict()
-    # 统计流行度
-    for user, items in train_data.items():
-        for item in items:
-            if item not in item_popularity:
-                item_popularity[item] = 0
-            item_popularity[item] += 1
-
-    # 计算推荐项目的平均流行度
-    ret = 0.0
-    n = 0
-    for user in train_data.keys():
-        rank = recommend_list.get(user)  # 给该用户推荐的物品
-        for item in rank:
-            ret += math.log(1 + item_popularity[item])
-        n += len(rank)
-    ret /= n * 1.0
-    print("calculate popularity done, cost " + str(time.time() - start) + " s")
-    return ret
-
-
-def split_data(all_data, m, k):
-    """
-    切分数据集 切为M分 k分作为测试集 剩下的作为训练集
-    :param all_data: dict 2d
-    :param m:
-    :param k:
-    :return:
-    """
-    start = time.time()
-
-    train_data = dict()
-    test_data = dict()
-
-    random.seed(time.time())
-
-    for user, items in all_data.items():
-        # 初始化dict
-        if user not in train_data:
-            train_data[user] = dict()
-        if user not in test_data:
-            test_data[user] = dict()
-
-        # 下面random sample方式效率明显高于 随机采样 if random.int(0,m) == k
-        test_data_keys = random.sample(list(items), int(len(items) / m * k))
-        train_data_keys = set(items.keys()) - set(test_data_keys)
-
-        for key in test_data_keys:
-            test_data[user][key] = items[key]
-
-        for key in train_data_keys:
-            train_data[user][key] = items[key]
-
-    print("split data done, cost " + str((time.time() - start) * 1000) + " ms")
-    return train_data, test_data
-
-
-def load_data(file):
-    """
-    加载数据
-    :param file:
-    :return: all_data dict 2d
-    """
-    start = time.time()
-    all_data = dict()
-    with open(file, 'r') as f:
-        line = f.readline()
-        while line is not None and line != '':
-            arr = line.split("::")
-            user = int(arr[0])
-            item = int(arr[1])
-            rating = int(arr[2])
-            if user not in all_data:
-                all_data[user] = dict()
-            all_data[user][item] = rating
-            line = f.readline()
-    print("load data done, cost " + str((time.time() - start) * 1000) + " ms")
-    return all_data
-    return_data = dict()
-    for key in all_data.keys():
-        if key <= 10000:
-            return_data[key] = all_data.get(key)
-    return return_data
-
-
-def save_result(_cost_time, _nearest_k, _top_n, _p, _r, _c, _po):
-    """
-    保存结果到文件中
-    :param _cost_time:
-    :param _nearest_k:
-    :param _top_n:
-    :param _p:
-    :param _r:
-    :param _c:
-    :param _po:
-    :return:
-    """
-    with open('result.txt', 'a') as f:
-        f.write(str(_nearest_k) + ", " + str(_top_n) + ", " + str(_p) + ", " + str(_r)
-                + ", " + str(_c) + ", " + str(_po) + "\n")
-
-
-def plot_result():
-    pass
-
-
 if __name__ == '__main__':
     start_time = time.time()
 
-    data = load_data("./data/ratings.dat")
-
-    train, test = split_data(data, 8, 1)
-
-    data.clear()
+    train, test = utils.split_data(utils.load_data("./data/ratings.dat"), 8, 1)
 
     W = item_similarity(train)
 
     recommends = recommend(train, W, nearest_k=10, top_n=10)
 
-    p = precision(train, test, recommends)
+    p = utils.precision(train, test, recommends)
 
-    r = recall(train, test, recommends)
+    r = utils.recall(train, test, recommends)
 
-    c = coverage(train, recommends)
+    c = utils.coverage(train, recommends)
 
-    po = popularity(train, recommends)
+    po = utils.popularity(train, recommends)
 
     cost_time = time.time() - start_time
 
