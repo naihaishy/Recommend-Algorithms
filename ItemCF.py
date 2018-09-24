@@ -17,14 +17,9 @@ import utils
 """
 
 
-def item_similarity_multi_process_func1(_train, _sub_users, _result_mq, _iuf=False):
+def item_similarity_multi_process_func1(_train, _sub_users, _result_dict, _iuf=False):
     """
     统计共现矩阵以及每个物品被多少用户交互过
-    :param _train:
-    :param _sub_users:
-    :param _result_mq:
-    :param _iuf:
-    :return:
     """
     num_items = dict()
     co_items = dict()
@@ -47,18 +42,11 @@ def item_similarity_multi_process_func1(_train, _sub_users, _result_mq, _iuf=Fal
                 if item_j not in co_items[item_i]:
                     co_items[item_i][item_j] = 0
                 co_items[item_i][item_j] += iuf_value
-    _result_mq.put((num_items, co_items))
+    # 暂时保存到主进程的dict中
+    _result_dict[time.time()] = (num_items, co_items)
 
 
-def item_similarity_multi_process_func2(_co_items, _num_items, _sub_items, _result_mq):
-    """
-    计算相似度
-    :param _sub_items:
-    :param _co_items:
-    :param _num_items:
-    :param _result_mq:
-    :return:
-    """
+def item_similarity_multi_process_func2(_co_items, _num_items, _sub_items, _result_dict):
     _item_sims = dict()
     for item_i in _sub_items:
         related_items = _co_items.get(item_i)  # 与该物品共同被其他用户交互的所有物品
@@ -68,7 +56,7 @@ def item_similarity_multi_process_func2(_co_items, _num_items, _sub_items, _resu
         for item_j, cij in related_items.items():
             # j物品 cij表示物品i和物品j被多少用户共有
             _item_sims[item_i][item_j] = cij / math.sqrt(_num_items[item_i] * _num_items[item_j])
-    _result_mq.put(_item_sims)
+    _result_dict[time.time()] = _item_sims
 
 
 def item_similarity_multi_process(_train, iuf=False):
@@ -78,94 +66,64 @@ def item_similarity_multi_process(_train, iuf=False):
     :param iuf: bool 是否考虑用户活跃度
     :return:
     """
-
     item_sims = dict()  # 物品相似度矩阵
     co_items = dict()  # 表示两个物品被多少用户共同交互过
     num_items = dict()  # 表示每个用品被多少用户交互过
-
     cpu_nums = multiprocessing.cpu_count()
 
-    # 统计矩阵 ---------
-    users = [user for user in _train]  # 所有用户集合
-    user_counts = len(users)
+    # ---统计矩阵---
+    all_users = [user for user in _train]  # 所有用户集合
+    step = int(len(all_users) / cpu_nums) + 1
+    user_chunks = [all_users[i:i + step] for i in range(0, len(all_users), step)]  # 平均切分users
 
-    result_mq_list = []
     process_list = []
+    result_dict = multiprocessing.Manager().dict()
     for i in range(cpu_nums):
         # 每个子进程处理一部分数据
-        step = int(user_counts / cpu_nums) + 1
-        start_idx = step * i
-        end_idx = step * (i + 1)
-        if end_idx >= user_counts:
-            end_idx = user_counts
-        sub_users = users[start_idx:end_idx]
-
-        # 进程通信 Queue
-        result_mq = multiprocessing.Queue()
         process = multiprocessing.Process(target=item_similarity_multi_process_func1,
-                                          args=(_train, sub_users, result_mq, iuf))
+                                          args=(_train, user_chunks[i], result_dict, iuf))
         process.start()
         process_list.append(process)
-        result_mq_list.append(result_mq)
 
-    # 等待子进程结束
+    # 等待所有子进程执行完毕
+    for pro in process_list:
+        pro.join()
 
-    # 所有进程均执行完毕
-
-    # 所有进程均执行完毕
-
-    # 获取数据
-    for queue in result_mq_list:
-        (sub_num_items, sub_co_items) = queue.get()
+    # 合并子进程的结果
+    for _, (sub_num_items, sub_co_items) in result_dict.items():
         # 合并dict 相同key的value叠加
         num_items = dict(Counter(num_items) + Counter(sub_num_items))
-
         # 合并dict 2d 相同key的value叠加
-        if co_items is None:
-            co_items = sub_co_items
-        else:
-            for item_i, sub_related_items in sub_co_items.items():
-                if item_i in item_sims:
-                    # 已经存在该物品为中心的共现dict 合并
-                    co_items[item_i] = dict(Counter(co_items[item_i]) + Counter(sub_related_items))
-                else:
-                    # 尚不存在该物品 赋值
-                    co_items[item_i] = sub_related_items
+        for item_i, sub_related_items in sub_co_items.items():
+            if item_i in co_items:
+                # 已经存在该物品为中心的共现dict 合并
+                co_items[item_i] = dict(Counter(co_items[item_i]) + Counter(sub_related_items))
+            else:
+                # 尚不存在该物品 赋值
+                co_items[item_i] = sub_related_items
 
-    # 计算物品之间的相似度 ------
+    # ---计算物品之间的相似度---
     all_items = [item for item in co_items]  # 所有物品集合
-    item_counts = len(all_items)  # 物品总数
+    step = int(len(all_items) / cpu_nums) + 1
+    item_chunks = [all_items[i:i + step] for i in range(0, len(all_items), step)]  # 平均切分items
 
-    result_mq_list = []
     process_list = []
+    result_dict = multiprocessing.Manager().dict()
     for i in range(cpu_nums):
         # 每个子进程处理一部分数据
-        step = int(item_counts / cpu_nums) + 1
-        start_idx = step * i
-        end_idx = step * (i + 1)
-        if end_idx >= item_counts:
-            end_idx = item_counts
-        sub_items = all_items[start_idx:end_idx]
-
-        # 进程通信 Queue
-        result_mq = multiprocessing.Queue()
         process = multiprocessing.Process(target=item_similarity_multi_process_func2,
-                                          args=(co_items, num_items, sub_items, result_mq))
+                                          args=(co_items, num_items, item_chunks[i], result_dict))
         process.start()
         process_list.append(process)
-        result_mq_list.append(result_mq)
 
-    # 等待子进程结束
+    # 等待所有子进程执行完毕
+    for process in process_list:
+        process.join()
 
-    # 所有进程均执行完毕
-    # 获取数据
-    for queue in result_mq_list:
-        sub_item_sims = queue.get()  # dict 2d
+    # 合并子进程的结果
+    for _, sub_item_sims in result_dict.items():
         # 合并dict  2d
-        if item_sims is None:
-            item_sims = sub_item_sims
-        else:
-            item_sims.update(sub_item_sims)
+        item_sims.update(sub_item_sims)
 
     return item_sims
 
@@ -331,9 +289,11 @@ def item_similarity(train_data):
     start = time.time()
     # 多进程 多线程 单线程 iuf
     # item_sims = item_similarity_multi_thread(train_data)
-    # item_sims = item_similarity_multi_process(train_data)
-    item_sims = item_similarity_single_thread(train_data)
+    item_sims = item_similarity_multi_process(train_data)
+    # item_sims = item_similarity_single_thread(train_data)
     # item_sims = item_similarity_iuf(train_data)
+
+    # compare_item_similarity(item_sims, item_sims1)
 
     # 归一化
     item_similarity_normal(item_sims)
@@ -341,7 +301,7 @@ def item_similarity(train_data):
     return item_sims
 
 
-def recommend_multi_process_func1(_users, _train, _item_sims, _nearest_k, _top_n, _result_mq):
+def recommend_multi_process_func1(_users, _train, _item_sims, _nearest_k, _top_n, _result_dict):
     _recommend_lists = dict()
     for user in _users:
         # 该用户交互过的物品
@@ -361,7 +321,8 @@ def recommend_multi_process_func1(_users, _train, _item_sims, _nearest_k, _top_n
         top_n_items = sorted(rank.items(), key=operator.itemgetter(1), reverse=True)[0:_top_n]
         # 转成list
         _recommend_lists[user] = [item for (item, _) in top_n_items]
-    _result_mq.put(_recommend_lists)
+    # 保存到主进程
+    _result_dict[time.time()] = _recommend_lists
 
 
 def recommend_multi_process(_train, _item_sims, _nearest_k, _top_n):
@@ -373,41 +334,29 @@ def recommend_multi_process(_train, _item_sims, _nearest_k, _top_n):
     :param _top_n: int 返回评分最高的n个物品
     :return recommend_lists: dict{list} 每个用户的top n推荐列表
     """
-
     recommend_lists = dict()
 
     cpu_nums = multiprocessing.cpu_count()
-    users = [user for user in _train]  # 所有用户集合
-    user_counts = len(users)
+    all_users = [user for user in _train]  # 所有用户集合
+    step = int(len(all_users) / cpu_nums) + 1
+    user_chunks = [all_users[i:i + step] for i in range(0, len(all_users), step)]  # 平均切分users
 
-    result_mq_list = []
+    result_dict = multiprocessing.Manager().dict()
     process_list = []
     for i in range(cpu_nums):
         # 每个子进程处理一部分数据
-        step = int(user_counts / cpu_nums) + 1
-        start_idx = step * i
-        end_idx = step * (i + 1)
-        if end_idx >= user_counts:
-            end_idx = user_counts
-        sub_users = users[start_idx:end_idx]
-
-        # 进程通信 Queue
-        result_mq = multiprocessing.Queue()
         process = multiprocessing.Process(target=recommend_multi_process_func1,
-                                          args=(sub_users, _train, _item_sims, _nearest_k, _top_n, result_mq))
-
+                                          args=(user_chunks[i], _train, _item_sims, _nearest_k, _top_n, result_dict))
         process.start()
         process_list.append(process)
-        result_mq_list.append(result_mq)
 
     # 等待子进程结束
     for process in process_list:
         process.join()
-    # 所有进程均执行完毕
 
-    # 获取数据
-    for queue in result_mq_list:
-        recommend_lists.update(queue.get())
+    # 合并子进程结果
+    for _, sub_recommend_list in result_dict.items():
+        recommend_lists.update(sub_recommend_list)
 
     return recommend_lists
 
