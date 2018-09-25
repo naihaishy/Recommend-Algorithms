@@ -35,7 +35,7 @@ def user_similarity_single_thread(_train, iif=False):
 
     for item, users in item_users.items():
         if iif:
-            iif_value = 1 / math.log(1 + len(users))
+            iif_value = 1 / math.log(1 + len(users) * 1.0)
         else:
             iif_value = 1
         # users 拥有该物品的用户集合
@@ -92,11 +92,8 @@ def user_similarity(train_data):
     :return:
     """
     start = time.time()
-    user_sims = user_similarity_single_thread(train_data)
+    user_sims = user_similarity_single_thread(train_data, True)
     # user_sims = user_similarity_iif(train_data)
-
-    # compare_user_similarity(user_sims, user_sims1)
-
     # 归一化
     # user_similarity_normal(user_sims)
     print("user similarity done, cost " + str(time.time() - start) + " s")
@@ -151,7 +148,6 @@ def recommend(train_data, user_sims, nearest_k=5, top_n=10):
 
 
 if __name__ == '__main__':
-
     start_time = time.time()
 
     train, test = utils.split_data(utils.load_data("./data/ratings.dat"), 8, 1)
