@@ -19,15 +19,15 @@ object ItemCF {
 
     val start = System.currentTimeMillis()
 
-    val item_sims: mutable.HashMap[Int, mutable.HashMap[Int, Double]] = mutable.HashMap()
-    val co_items: mutable.HashMap[Int, mutable.HashMap[Int, Int]] = mutable.HashMap()
-    val num_items: mutable.HashMap[Int, Int] = mutable.HashMap()
+    val item_sims= mutable.HashMap[Int, mutable.HashMap[Int, Double]]()
+    val co_items = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
+    val num_items = mutable.HashMap[Int, Int] ()
 
     // 统计共现矩阵
     train_data.foreach(elem => {
       elem._2.foreach(item_i => {
         if (!co_items.contains(item_i._1))
-          co_items.put(item_i._1, mutable.HashMap[Int, Int]())
+          co_items.put(item_i._1, mutable.HashMap())
 
         if (!num_items.contains(item_i._1))
           num_items.put(item_i._1, 0)
@@ -46,7 +46,7 @@ object ItemCF {
     //计算物品之间的相似度
     co_items.foreach(elem => {
       if (!item_sims.contains(elem._1))
-        item_sims.put(elem._1, mutable.HashMap[Int, Double]())
+        item_sims.put(elem._1, mutable.HashMap())
 
       elem._2.foreach(item => {
         item_sims(elem._1).put(item._1, item._2 / math.sqrt(num_items(elem._1) * num_items(item._1)))
@@ -65,10 +65,10 @@ object ItemCF {
                 nearest_k: Int, top_n: Int): mutable.HashMap[Int, List[Int]] = {
 
     val start = System.currentTimeMillis()
-    val recommend_lists: mutable.HashMap[Int, List[Int]] = mutable.HashMap()
+    val recommend_lists = mutable.HashMap[Int, List[Int]]()
 
     train_data.foreach(elem => {
-      val rank: mutable.HashMap[Int, Double] = mutable.HashMap()
+      val rank = mutable.HashMap[Int, Double]()
       // 该用户交互过的物品elem._2
       elem._2.foreach(item => {
         //根据相似度矩阵, 找到距离物品i最近的K个物品
@@ -86,7 +86,6 @@ object ItemCF {
       // 选择Top N 作为该用户的推荐
       val top_n_items = rank.toList.sortBy(_._2).reverse.take(top_n).map(_._1)
       recommend_lists.put(elem._1, top_n_items)
-
     })
     println("recommend done, cost " + (System.currentTimeMillis() - start) + " ms")
     recommend_lists
@@ -97,26 +96,35 @@ object ItemCF {
     val start = System.currentTimeMillis()
 
     val all_data = Utils.load_data("E:\\Python\\Projects\\Recommendation\\data\\ratings.dat")
-    val (train, test) = Utils.split_data(all_data, 10, 1)
 
-    // 计算物品相似度
-    val W = item_similarity(train)
+    for (i <- 5 until 12) {
 
-    // 获取推荐列表
-    val recommends = recommend(train, W, nearest_k = 10, top_n = 10)
+      val (train, test) = Utils.split_data(all_data, 8, 1)
 
-    // 计算指标
-    val p = Utils.precision(train, test, recommends)
+      // 计算物品相似度
+      val W = item_similarity(train)
 
-    val r = Utils.recall(train, test, recommends)
+      // 获取推荐列表
+      val recommends = recommend(train, W, nearest_k = 10, top_n = 10)
 
-    val c = Utils.coverage(train, recommends)
+      // 计算指标
+      val p = Utils.precision(train, test, recommends)
 
-    val po = Utils.popularity(train, recommends)
+      val r = Utils.recall(train, test, recommends)
 
-    println(p, r, c, po)
+      val c = Utils.coverage(train, recommends)
 
-    println("all work  done, cost " + (System.currentTimeMillis() - start)/1000 + " s")
+      val po = Utils.popularity(train, recommends)
+
+      println(p, r, c, po)
+
+      Utils.save_result("precision: " + p.toString + ",recall: " + r.toString
+        + ",coverage: " + c.toString + ",popularity: " + po.toString)
+
+    }
+
+
+    println("all work  done, cost " + (System.currentTimeMillis() - start) / 1000 + " s")
 
   }
 

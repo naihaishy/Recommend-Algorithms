@@ -3,6 +3,7 @@ package com.naihai.study
 import scala.collection.mutable
 import scala.io.Source
 import scala.util.Random
+import java.io._
 
 
 object Utils {
@@ -13,7 +14,7 @@ object Utils {
     */
   def load_data(filename: String): mutable.HashMap[Int, mutable.HashMap[Int, Int]] = {
     val start = System.currentTimeMillis()
-    val data: mutable.HashMap[Int, mutable.HashMap[Int, Int]] = mutable.HashMap()
+    val data = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
     Source.fromFile(filename).getLines().foreach(line => {
       val arr = line.split("::")
       val user = arr(0).toInt
@@ -34,13 +35,14 @@ object Utils {
   def split_data(data: mutable.HashMap[Int, mutable.HashMap[Int, Int]], m: Int, k: Int):
   (mutable.HashMap[Int, mutable.HashMap[Int, Int]], mutable.HashMap[Int, mutable.HashMap[Int, Int]]) = {
     val start = System.currentTimeMillis()
-    val train_data: mutable.HashMap[Int, mutable.HashMap[Int, Int]] = mutable.HashMap()
-    val test_data: mutable.HashMap[Int, mutable.HashMap[Int, Int]] = mutable.HashMap()
+    val train_data = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
+    val test_data = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
     data.foreach(elem => {
+      //elem._1 user elem._2 该用户交互过的项目
       val test_data_keys = Random.shuffle(elem._2.keys.toList).take(elem._2.size / m * k).toSet
       // 一个用户的训练集与测试集
-      val train_user_data: mutable.HashMap[Int, Int] = mutable.HashMap()
-      val test_user_data: mutable.HashMap[Int, Int] = mutable.HashMap()
+      val train_user_data  = mutable.HashMap[Int, Int]()
+      val test_user_data  = mutable.HashMap[Int, Int]()
       elem._2.foreach(item => {
         if (test_data_keys.contains(item._1))
           test_user_data.put(item._1, item._2)
@@ -109,8 +111,8 @@ object Utils {
                recommend_list: mutable.HashMap[Int, List[Int]]): Double = {
 
     val start = System.currentTimeMillis()
-    var recommend_items: Set[Int] = Set() //所有的推荐物品集合
-    var all_items: Set[Int] = Set() //所有物品集合
+    var recommend_items = Set[Int]() //所有的推荐物品集合
+    var all_items = Set[Int]() //所有物品集合
     train_data.foreach(elem => {
       // elem._1 user elem._2 该用户交互的物品集合
       val rank = recommend_list(elem._1).toSet //给该用户推荐的物品
@@ -129,7 +131,7 @@ object Utils {
                  recommend_list: mutable.HashMap[Int, List[Int]]): Double = {
 
     val start = System.currentTimeMillis()
-    val item_popularity: mutable.HashMap[Int, Int] = mutable.HashMap() //所有物品的流行度
+    val item_popularity  = mutable.HashMap[Int, Int]() //所有物品的流行度
     train_data.foreach(elem => {
       // elem._1 user elem._2 该用户交互的物品集合
       elem._2.foreach(item => {
@@ -152,6 +154,16 @@ object Utils {
     })
     println("calculate popularity done, cost " + (System.currentTimeMillis() - start) + " ms")
     ret / (count * 1.0)
+  }
+
+  /**
+    * 保存结果
+    * @param line
+    */
+  def save_result(line:String): Unit ={
+    val writer = new FileWriter("result.txt")
+    writer.write(line)
+    writer.close()
   }
 
 
