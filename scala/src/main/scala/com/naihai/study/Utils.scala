@@ -32,8 +32,8 @@ object Utils {
     * 切分数据集
     * 切为M分 k分作为测试集 剩下的作为训练集
     */
-  def split_data(data: mutable.HashMap[Int, mutable.HashMap[Int, Int]], m: Int, k: Int):
-  (mutable.HashMap[Int, mutable.HashMap[Int, Int]], mutable.HashMap[Int, mutable.HashMap[Int, Int]]) = {
+  def split_data(data: mutable.HashMap[Int, mutable.HashMap[Int, Int]], m: Int, k: Int): (
+    mutable.HashMap[Int, mutable.HashMap[Int, Int]], mutable.HashMap[Int, mutable.HashMap[Int, Int]]) = {
     val start = System.currentTimeMillis()
     val train_data = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
     val test_data = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
@@ -41,8 +41,8 @@ object Utils {
       //elem._1 user elem._2 该用户交互过的项目
       val test_data_keys = Random.shuffle(elem._2.keys.toList).take(elem._2.size / m * k).toSet
       // 一个用户的训练集与测试集
-      val train_user_data  = mutable.HashMap[Int, Int]()
-      val test_user_data  = mutable.HashMap[Int, Int]()
+      val train_user_data = mutable.HashMap[Int, Int]()
+      val test_user_data = mutable.HashMap[Int, Int]()
       elem._2.foreach(item => {
         if (test_data_keys.contains(item._1))
           test_user_data.put(item._1, item._2)
@@ -131,7 +131,7 @@ object Utils {
                  recommend_list: mutable.HashMap[Int, List[Int]]): Double = {
 
     val start = System.currentTimeMillis()
-    val item_popularity  = mutable.HashMap[Int, Int]() //所有物品的流行度
+    val item_popularity = mutable.HashMap[Int, Int]() //所有物品的流行度
     train_data.foreach(elem => {
       // elem._1 user elem._2 该用户交互的物品集合
       elem._2.foreach(item => {
@@ -158,9 +158,9 @@ object Utils {
 
   /**
     * 保存结果
-    * @param line
+    *
     */
-  def save_result(line:String): Unit ={
+  def save_result(line: String): Unit = {
     val writer = new FileWriter("result.txt")
     writer.write(line)
     writer.close()

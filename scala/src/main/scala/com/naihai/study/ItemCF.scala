@@ -1,7 +1,6 @@
-import com.naihai.study.Utils
+package com.naihai.study
 
 import scala.collection.mutable
-
 
 /**
   *
@@ -19,9 +18,9 @@ object ItemCF {
 
     val start = System.currentTimeMillis()
 
-    val item_sims= mutable.HashMap[Int, mutable.HashMap[Int, Double]]()
+    val item_sims = mutable.HashMap[Int, mutable.HashMap[Int, Double]]()
     val co_items = mutable.HashMap[Int, mutable.HashMap[Int, Int]]()
-    val num_items = mutable.HashMap[Int, Int] ()
+    val num_items = mutable.HashMap[Int, Int]()
 
     // 统计共现矩阵
     train_data.foreach(elem => {
@@ -97,9 +96,9 @@ object ItemCF {
 
     val all_data = Utils.load_data("E:\\Python\\Projects\\Recommendation\\data\\ratings.dat")
 
-    for (i <- 5 until 12) {
+    for (i <- 1 until 5) {
 
-      val (train, test) = Utils.split_data(all_data, 8, 1)
+      val (train, test) = Utils.split_data(all_data, i, 1)
 
       // 计算物品相似度
       val W = item_similarity(train)
